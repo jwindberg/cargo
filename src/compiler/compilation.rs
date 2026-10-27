@@ -429,6 +429,19 @@ impl<'gctx> Compilation<'gctx> {
             search_path.push(PathBuf::from("/usr/local/lib"));
             search_path.push(PathBuf::from("/usr/lib"));
         }
+        if cfg!(target_os = "haiku") && dylib_path_is_empty {
+            // This mirrors the macOS case above, but for Haiku, which uses
+            // the env variable LIBRARY_PATH.
+            // See `search_path_for_type()` in Haiku's
+            // src/system/runtime_loader/runtime_loader.cpp
+
+            // `%A` gets replaced by Haiku's runtime loader with the
+            // folder of the program being started.
+            search_path.push(PathBuf::from("%A/lib"));
+
+            search_path.push(PathBuf::from("/boot/system/non-packaged/lib"));
+            search_path.push(PathBuf::from("/boot/system/lib"));
+        }
         let search_path = paths::join_paths(&search_path, paths::dylib_path_envvar())?;
 
         cmd.env(paths::dylib_path_envvar(), &search_path);

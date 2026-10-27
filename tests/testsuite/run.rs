@@ -1962,6 +1962,93 @@ fn run_link_system_path_macos() {
 }
 
 #[cargo_test]
+#[cfg(target_os = "haiku")]
+fn run_link_system_path_haiku() {
+    use std::fs;
+    use std::path::Path;
+    // Check that the default system library path is honored.
+    // First, build a shared library that will be accessed from
+    // LIBRARY_PATH.
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+            [package]
+            name = "foo"
+            version = "0.0.1"
+            edition = "2015"
+            [lib]
+            crate-type = ["cdylib"]
+            "#,
+        )
+        .file(
+            "src/lib.rs",
+            "#[no_mangle] pub extern fn something_shared() {}",
+        )
+        .build();
+    p.cargo("build").run();
+
+    // When LIBRARY_PATH is unset, Haiku's dynamic loader searches:
+    //      %A/lib:/boot/system/non-packaged/lib:/boot/system/lib
+    //
+    // 1. Build with rustc-link-search pointing to libfoo to link the binary.
+    // 2. Move the library to %A/lib (target/debug/lib).
+    // 3. Run `cargo run` to verify bar resolves the library via %A/lib.
+    //
+    // Note: `cargo test` is omitted because modern test binaries are placed
+    // in hashed output directories, preventing the test harness from reliably
+    // staging the library adjacent to the runner.
+    let p2 = project()
+        .at("bar")
+        .file("Cargo.toml", &basic_bin_manifest("bar"))
+        .file(
+            "src/main.rs",
+            r#"
+            extern {
+                fn something_shared();
+            }
+            fn main() {
+                unsafe { something_shared(); }
+            }
+            "#,
+        )
+        .file(
+            "build.rs",
+            &format!(
+                r#"
+                fn main() {{
+                    println!("cargo::rustc-link-lib=foo");
+                    println!("cargo::rustc-link-search={}");
+                }}
+                "#,
+                p.target_debug_dir().display()
+            ),
+        )
+        .build();
+    p2.cargo("build").run();
+    p2.cargo("test").run();
+
+    let libdir = p2.target_debug_dir().join("lib");
+    fs::create_dir(&libdir).unwrap();
+    fs::rename(
+        p.target_debug_dir().join("libfoo.so"),
+        libdir.join("libfoo.so"),
+    )
+    .unwrap();
+    p.root().rm_rf();
+    const VAR: &str = "LIBRARY_PATH";
+    // Reset LIBRARY_PATH so that we don't inherit anything that
+    // was set by the cargo that invoked the test.
+    p2.cargo("run").env_remove(VAR).run();
+    // Ensure this still works when LIBRARY_PATH has
+    // a value set.
+    let lib_path_with_sys_dir =
+        std::env::join_paths([libdir.as_path(), Path::new("/boot/system/lib")]).unwrap();
+    p2.cargo("run").env(VAR, &lib_path_with_sys_dir).run();
+    p2.cargo("test").env(VAR, &lib_path_with_sys_dir).run();
+}
+
+#[cargo_test]
 fn run_binary_with_same_name_as_dependency() {
     let p = project()
         .file(
